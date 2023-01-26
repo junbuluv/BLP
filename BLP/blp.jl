@@ -1,6 +1,6 @@
-using CSV, DataFrames
+using CSV, DataFrames, ForwardDiff, NLsolve, LinearAlgebra, Optim, LineSearches, JuMP, Ipopt, Statistics, Random
 
-df = CSV.read("/Users/junbu/Documents/GitHub/BLP/BLP/data/data.csv", DataFrame)
+df = CSV.read("C:/Users/16192/Documents/GitHub/BLP/BLP/data/data.csv", DataFrame)
 
 # Table 3 column 1. Linear regression 
 # Berry (1994) Inversion:
@@ -30,14 +30,102 @@ data.demand_instruments6, data.demand_instruments7)
 W = inv(Z'*Z)
 β_IV = inv(X'*Z*W*Z'*X)*X'*Z*W*Z'*Y
 
+########################################################################################################################
+
+#################### RANDOM COEFFICIENT LOGIT ##########################################################################
+
+########################################################################################################################
+"""
+Objective : Build MPEC approach BLP estimation
+"""
+mutable struct Marketdata
+    """for market t in 1: T"""
+    # marketshare : s_{1t} ~ s_{Jt} J X 1 vector
+    s::AbstractVector
+
+    # price : p_{1} ~ p_{J} : J X 1 vector
+    p::AbstractVector
+
+    # product characteristics : X_{11}~ X_{JK} (K X J) matrix
+    x::AbstractMatrix
+
+    # cost shifter : w_{11} ~ w_{JL} (L X J) matrix (cost shifters include some of the good characteristics)
+    w::AbstractMatrix
+
+    # firm_ids : there are M firms in market t
+    firm_ids::AbstractVector
+
+    # demandinstruments : zd_{11} ~ zd_{MJ} (M X J) matirx (Note: IV numbers must be bigger or equal to endogenous variable number)
+    zd::AbstractMatrix
+
+    # supplyinstruments : zs_{11} ~ zs_{HJ} (H X J) matrix (Note: IV numbers must be bigger or equal to endogenous variable number)
+    zs::AbstractMatrix
+
+    # monte_carlo integration : (K X S) matrix 
+    ν::AbstractMatrix
+end
 
 
-#################### RANDOM COEFFICIENT LOGIT ####################
+"""
+For market t : there are T markets
+compute share : s_{jt} for j in 1:J
+
+Input: price, good characteristics, simulated numbers , δ:: mean utility (x*β - α*p)
+"""
 
 
 
+function share(x::AbstractMatrix, σ::AbstractVector, δ::AbstractVector, ν::AbstractMatrix)
+    # product number
+    J = length(δ)
+    # characteristics number
+    K = size(σ,1)
+    # simulation number
+    S = size(ν,2)
+    
+    # initialize share : s_{1}~ s_{J} JX1 vector
+    s = zeros(eltype(δ), size(δ))
+    # monte_carlo integration part
+    si = similar(s)
+    σx = σ.*x'
+    @inbounds for i in 1:S
+        @simd   for j in 1:J
+            @views si[j] = δ[j] + dot(σx[:,j], ν[:,i])
+        end
+        maxsi = max(maximum(si), 0)
+        si .-= maxsi
+        si  .= exp.(si)
+        si .= si./(exp.(-maxsi) + sum(si))
+        s .+= si
+    end
+    s ./= S
+    s .+= eps(zero(eltype(s)))
+    return s
+
+end
+
+"""
+Delta contraction:
+    After computing share, s_{1} ,...s_{J} 
+    δ <- δ + log(S) - log(share_{1},...,{J}(β, σ))
+    recover true δ
+
+"""
 
 
+function contraction(s::AbstractVector, δ::AbstractVector, σ::AbstractVector, x::AbstractMatrix, ν::AbstractMatrix)
+    maxiter = 100000
+    tol = 1e-14
+    init = log.(s) .- log.(1-sum(s))
+    sol = NLsolve.fixedpoint(delta->(delta .+ log.(s) .- log.(share(x, σ, delta, ν))), init , method=:anderson, show_trace=true)
+    sol
+    return sol.zero
+end
+
+
+"""
+GMM part
+"""
 
 
 
